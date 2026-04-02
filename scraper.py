@@ -1,5 +1,4 @@
 import requests
-from bs4 import BeautifulSoup
 import json
 import os
 
@@ -27,22 +26,30 @@ def invia_telegram(messaggio):
     requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": messaggio, "parse_mode": "HTML"})
 
 def scrapa_subito():
-    url = "https://www.subito.it/annunci-toscana/affitto/appartamenti/pistoia/?q=appartamento&t=a&c=1&qso=true"
+    url = "https://api.subito.it/svc/search/v1/listings?c=1&z=10&t=a&lim=50&start=0&q=appartamento&tos=false&shp=false&ci=52&r=30"
     headers = {"User-Agent": "Mozilla/5.0"}
     annunci = []
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        cards = soup.find_all("div", class_="item-key-data")
-        for card in cards:
+        dati = r.json()
+        items = dati.get("ads", [])
+        for item in items:
             try:
-                titolo = card.find("h2").text.strip()
-                prezzo_tag = card.find("p", class_="price")
-                prezzo_str = prezzo_tag.text.strip() if prezzo_tag else ""
-                prezzo = int("".join(filter(str.isdigit, prezzo_str)))
-                link_tag = card.find_parent("a")
-                link = link_tag["href"] if link_tag else ""
-                annunci.append({"titolo": titolo, "prezzo": prezzo, "link": link})
+                titolo = item.get("subject", "")
+                prezzo_info = item.get("features", {}).get("/price", {})
+                prezzo = int(prezzo_info.get("values", [{}])[0].get("key", 0))
+                locali_info = item.get("features", {}).get("/rooms", {})
+                locali_str = locali_info.get("values", [{}])[0].get("key", "0")
+                locali = int(locali_str) if locali_str.isdigit() else 0
+                link = item.get("urls", {}).get("default", "")
+                citta = item.get("geo", {}).get("city", {}).get("value", "")
+                annunci.append({
+                    "titolo": titolo,
+                    "prezzo": prezzo,
+                    "locali": locali,
+                    "link": link,
+                    "citta": citta
+                })
             except:
                 continue
     except Exception as e:
@@ -50,11 +57,7 @@ def scrapa_subito():
     return annunci
 
 def filtra(annunci):
-    risultati = []
-    for a in annunci:
-        if a["prezzo"] <= PREZZO_MAX:
-            risultati.append(a)
-    return risultati
+    return [a for a in annunci if a["prezzo"] <= PREZZO_MAX and a["locali"] >= LOCALI_MIN]
 
 def main():
     visti = carica_visti()
@@ -67,7 +70,11 @@ def main():
         return
 
     for a in nuovi:
-        msg = f"🏠 <b>{a['titolo']}</b>\n💶 {a['prezzo']}€/mese\n🔗 {a['link']}"
+        msg = (f"🏠 <b>{a['titolo']}</b>\n"
+               f"📍 {a['citta']}\n"
+               f"🛏 {a['locali']} locali\n"
+               f"💶 {a['prezzo']}€/mese\n"
+               f"🔗 {a['link']}")
         invia_telegram(msg)
         visti.append(a["link"])
 
