@@ -46,6 +46,7 @@ def scrapa_immobiliare():
     try:
         r = requests.get(url, params=params, headers=headers, timeout=10)
         print("STATUS:", r.status_code)
+        print("RISPOSTA:", r.text[:500])
         dati = r.json()
         items = dati.get("results", [])
         print(f"Annunci trovati: {len(items)}")
