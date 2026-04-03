@@ -35,68 +35,59 @@ def scrapa_appag():
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        cards = soup.find_all("a", href=True)
-        for card in cards:
+        for card in soup.find_all("a", href=True):
             href = card["href"]
-            if "sch-" in href and "affitto" in href:
-                titolo_tag = card.find("h6")
-                titolo = titolo_tag.text.strip() if titolo_tag else "Appartamento APPAG"
-                prezzo = 0
-                h6_tags = card.find_all("h6")
-                for h6 in h6_tags:
-                    if "€" in h6.text:
-                        try:
-                            prezzo = int("".join(filter(str.isdigit, h6.text.split(",")[0])))
-                        except:
-                            pass
-                locali = 0
-                for li in card.find_all("li"):
-                    testo = li.text.strip().lower()
-                    if "vani" in testo:
-                        try:
-                            locali = int("".join(filter(str.isdigit, testo)))
-                        except:
-                            pass
-                link = "https://www.appag.it/" + href if not href.startswith("http") else href
-                annunci.append({"titolo": titolo, "prezzo": prezzo, "locali": locali, "link": link, "fonte": "APPAG"})
+            if "sch-" not in href or "affitto" not in href:
+                continue
+            titolo_tag = card.find("h6")
+            titolo = titolo_tag.text.strip() if titolo_tag else "Appartamento APPAG"
+            prezzo = 0
+            for h6 in card.find_all("h6"):
+                if "€" in h6.text:
+                    try:
+                        prezzo = int("".join(filter(str.isdigit, h6.text.split(",")[0])))
+                    except:
+                        pass
+            locali = 0
+            for li in card.find_all("li"):
+                if "vani" in li.text.lower():
+                    try:
+                        locali = int("".join(filter(str.isdigit, li.text)))
+                    except:
+                        pass
+            link = "https://www.appag.it/" + href if not href.startswith("http") else href
+            annunci.append({"titolo": titolo, "prezzo": prezzo, "locali": locali, "link": link, "fonte": "APPAG"})
     except Exception as e:
-        invia_telegram(f"⚠️ Errore scraper APPAG: {e}")
-    print(f"APPAG: trovati {len(annunci)} annunci affitto")
+        invia_telegram(f"⚠️ Errore APPAG: {e}")
+    print(f"APPAG: {len(annunci)} annunci affitto")
     return annunci
 
 def scrapa_scrigno():
-    url = "https://immobili.scrignoimmobiliare.it/it/immobili-residenziali/affitto.html"
+    url = "https://www.scrignoimmobiliare.it/immobili/"
     annunci = []
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        cards = soup.find_all("div", class_=lambda c: c and "property" in c.lower())
-        if not cards:
-            cards = soup.find_all("article")
-        for card in cards:
-            try:
-                titolo_tag = card.find(["h2", "h3", "h4"])
-                titolo = titolo_tag.text.strip() if titolo_tag else "Appartamento Scrigno"
-                prezzo = 0
-                testo_card = card.get_text()
-                for parte in testo_card.split("€"):
-                    if len(parte) > 0:
-                        try:
-                            prezzo = int("".join(filter(str.isdigit, parte.split()[0])))
-                            if prezzo > 0:
-                                break
-                        except:
-                            pass
-                link_tag = card.find("a", href=True)
-                link = link_tag["href"] if link_tag else ""
-                if link and not link.startswith("http"):
-                    link = "https://immobili.scrignoimmobiliare.it" + link
-                annunci.append({"titolo": titolo, "prezzo": prezzo, "locali": 0, "link": link, "fonte": "Scrigno"})
-            except:
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            # Solo affitti residenziali: codice SA nel link
+            if "/immobile/" not in href:
                 continue
+            slug = href.rstrip("/").split("/")[-1]
+            if not slug.endswith(tuple([f"sa{i}" for i in range(10000)])):
+                # Controlla presenza di -sa seguite da numeri
+                import re
+                if not re.search(r'-sa\d+$', slug):
+                    continue
+            titolo_tag = a.find(["h2", "h3", "h4"])
+            if not titolo_tag:
+                continue
+            titolo = titolo_tag.text.strip()
+            link = href if href.startswith("http") else "https://www.scrignoimmobiliare.it" + href
+            annunci.append({"titolo": titolo, "prezzo": 0, "locali": 0, "link": link, "fonte": "Scrigno"})
     except Exception as e:
-        invia_telegram(f"⚠️ Errore scraper Scrigno: {e}")
-    print(f"Scrigno: trovati {len(annunci)} annunci affitto")
+        invia_telegram(f"⚠️ Errore Scrigno: {e}")
+    print(f"Scrigno: {len(annunci)} annunci affitto")
     return annunci
 
 def filtra(annunci):
@@ -121,12 +112,13 @@ def main():
 
     for a in nuovi:
         prezzo_str = f"{a['prezzo']}€/mese" if a["prezzo"] > 0 else "prezzo non indicato"
-        locali_str = f"{a['locali']} vani" if a["locali"] > 0 else "vani non indicati"
+        locali_str = f"{a['locali']} vani" if a["locali"] > 0 else ""
         msg = (f"🏠 <b>{a['titolo']}</b>\n"
-               f"🏢 {a['fonte']}\n"
-               f"🛏 {locali_str}\n"
-               f"💶 {prezzo_str}\n"
-               f"🔗 {a['link']}")
+               f"🏢 {a['fonte']}\n")
+        if locali_str:
+            msg += f"🛏 {locali_str}\n"
+        msg += (f"💶 {prezzo_str}\n"
+                f"🔗 {a['link']}")
         invia_telegram(msg)
         visti.append(a["link"])
         time.sleep(1)
