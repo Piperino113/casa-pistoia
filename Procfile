@@ -1,1 +1,1 @@
-worker: python scraper.pyworker: echo "scraper in pausa"
+worker: python scraper.py
