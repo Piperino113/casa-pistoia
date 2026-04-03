@@ -1,6 +1,8 @@
 import requests
+from bs4 import BeautifulSoup
 import json
 import os
+import time
 
 # --- CONFIGURAZIONE ---
 TELEGRAM_TOKEN = "8604946013:AAFbpWeoNX5kgiDmZYpX7m4wzySZfSIAMac"
@@ -10,6 +12,8 @@ FILE_VISTI = "annunci_visti.json"
 # --- FILTRI ---
 PREZZO_MAX = 700
 LOCALI_MIN = 3
+
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 def carica_visti():
     if os.path.exists(FILE_VISTI):
@@ -25,51 +29,42 @@ def invia_telegram(messaggio):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": messaggio, "parse_mode": "HTML"})
 
-def scrapa_immobiliare():
-    url = "https://www.immobiliare.it/api-next/search-list/real-estates/"
-    params = {
-        "fkRegione": "toscana",
-        "idProvincia": "PT",
-        "idContratto": "2",
-        "idCategoria": "1",
-        "prezzoMassimo": PREZZO_MAX,
-        "localiMinimo": LOCALI_MIN,
-        "pag": "1",
-        "paramsCount": "1",
-        "from": "search_list"
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
+def scrapa_appag():
+    url = "https://www.appag.it/appartamenti-affitto-pistoia.php"
     annunci = []
     try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        print("STATUS:", r.status_code)
-        print("RISPOSTA:", r.text[:500])
-        dati = r.json()
-        items = dati.get("results", [])
-        print(f"Annunci trovati: {len(items)}")
-        for item in items:
-            try:
-                titolo = item.get("seo", {}).get("anchor", "")
-                prezzo_info = item.get("price", {})
-                prezzo = prezzo_info.get("value", 0)
-                locali = item.get("properties", [{}])[0].get("rooms", 0)
-                citta = item.get("properties", [{}])[0].get("location", {}).get("city", "")
-                link = "https://www.immobiliare.it" + item.get("seo", {}).get("url", "")
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        cards = soup.find_all("a", href=True)
+        for card in cards:
+            href = card["href"]
+            if "affitto" in href and "sch-" in href:
+                titolo_tag = card.find("h6")
+                titolo = titolo_tag.text.strip() if titolo_tag else href
+                prezzo_tag = card.find("h6", string=lambda t: t and "€" in t)
+                prezzo_str = prezzo_tag.text.strip() if prezzo_tag else "0"
+                prezzo = int("".join(filter(str.isdigit, prezzo_str.split(",")[0])))
+                vani_tag = card.find_all("li")
+                locali = 0
+                for li in vani_tag:
+                    testo = li.text.strip().lower()
+                    if "vani" in testo:
+                        try:
+                            locali = int("".join(filter(str.isdigit, testo)))
+                        except:
+                            pass
+                link = "https://www.appag.it/" + href if not href.startswith("http") else href
                 annunci.append({
                     "titolo": titolo,
                     "prezzo": prezzo,
                     "locali": locali,
-                    "citta": citta,
-                    "link": link
+                    "link": link,
+                    "fonte": "APPAG"
                 })
-            except:
-                continue
     except Exception as e:
-        invia_telegram(f"⚠️ Errore scraper Immobiliare.it: {e}")
-        print(f"Errore: {e}")
+        invia_telegram(f"⚠️ Errore scraper APPAG: {e}")
+        print(f"Errore APPAG: {e}")
+    print(f"APPAG: trovati {len(annunci)} annunci")
     return annunci
 
 def filtra(annunci):
@@ -77,9 +72,11 @@ def filtra(annunci):
 
 def main():
     visti = carica_visti()
-    tutti = scrapa_immobiliare()
+    tutti = scrapa_appag()
     filtrati = filtra(tutti)
     nuovi = [a for a in filtrati if a["link"] not in visti]
+
+    print(f"Totale: {len(tutti)} | Filtrati: {len(filtrati)} | Nuovi: {len(nuovi)}")
 
     if not nuovi:
         print("Nessun annuncio nuovo.")
@@ -87,12 +84,13 @@ def main():
 
     for a in nuovi:
         msg = (f"🏠 <b>{a['titolo']}</b>\n"
-               f"📍 {a['citta']}\n"
-               f"🛏 {a['locali']} locali\n"
+               f"🏢 {a['fonte']}\n"
+               f"🛏 {a['locali']} vani\n"
                f"💶 {a['prezzo']}€/mese\n"
                f"🔗 {a['link']}")
         invia_telegram(msg)
         visti.append(a["link"])
+        time.sleep(1)
 
     salva_visti(visti)
     print(f"{len(nuovi)} annunci inviati.")
